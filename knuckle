@@ -1,0 +1,81 @@
+#! /bin/bash
+
+## knuckle 
+#     Launches an ephemeral proxy instance and set SOCKS5 proxy
+#     On interrupt, shuts down instance and turns off proxy
+#
+# Assumes this machine's id_rds.pub is imported into the AWS region
+#
+# Dependencies:
+#
+#    awscli w/ working IAM credentials
+#        
+
+if [[ $EUID -ne 0 ]]; then
+  echo "You must be a root user" 2>&1
+  exit 1
+fi
+
+trap clean_up SIGINT
+
+set -e
+
+REGION=$1
+DEPLOYMENT=$(openssl rand -base64 8)
+
+if [ -z ${REGION-} ]; then
+    REGION="us-west-2"
+fi
+
+case $REGION in
+    "us-west-2")
+	AMI="ami-e7527ed7"
+	;;
+    "eu-west-1")
+	AMI="ami-a10897d6"
+	;;
+esac
+
+function startup_server {
+    echo "Starting up proxy server"
+    id=$(aws ec2 run-instances --image-id "$AMI" --instance-type "t2.micro" --query "Instances[].InstanceId" --output text --region "$REGION" --key-name "macbook")
+    aws ec2 create-tags --resources "$id" --tags Key="Deployment",Value="$DEPLOYMENT" --region "$REGION"
+    echo "Waiting for proxy server ($id)"
+    aws ec2 wait instance-status-ok --instance-ids $id --region "$REGION"
+}
+
+function shutdown_server {
+    id=$(aws ec2 describe-instances --filters "Name=tag-value,Values=$DEPLOYMENT" --query "Reservations[].Instances[].InstanceId" --output text --region "$REGION" )
+    echo "Shutting down proxy server: $id"
+    aws ec2 terminate-instances --instance-ids $id --region "$REGION"
+}
+
+function open_connection {
+    ip=$(aws ec2 describe-instances --filters "Name=tag-value,Values=$DEPLOYMENT" --query "Reservations[].Instances[].NetworkInterfaces[].Association.PublicIp" --output text --region "$REGION")
+    echo "Opening SSH connection to $ip"
+    ssh -Nn -D 8085 -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -l ec2-user $ip &
+}
+
+function start_proxy {
+    echo "Setting SOCKS5 proxy"
+    sudo networksetup -setsocksfirewallproxy "Wi-Fi" 127.0.0.1 8085    
+}
+
+function stop_proxy {
+    echo "Closing SOCKS5 proxy"
+    sudo networksetup -setsocksfirewallproxystate "Wi-Fi" off
+}
+
+function clean_up {
+    stop_proxy
+    shutdown_server 
+    exit
+}
+
+startup_server
+open_connection
+start_proxy
+
+echo "Proxy ready. Press ENTER to terminate instance and exit."
+read
+clean_up
