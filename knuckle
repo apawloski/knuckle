@@ -2,16 +2,20 @@
 
 set -e
 
-## knuckle 
-#     Launches an ephemeral proxy instance and set SOCKS5 proxy
-#     On interrupt, shuts down instance and turns off proxy
+## knuckle
+#    A small script for encrypting traffic on OS X
 #
-# Assumes this machine's id_rsa.pub is imported into the AWS region
+#    Launches an ephemeral proxy instance and set SOCKS5 proxy
+#    On interrupt, shuts down instance and turns off proxy
 #
 # Dependencies:
 #
 #    awscli w/ working IAM credentials
-#
+#    AnyBar (Optional: for status bar indicator when tunnel is active)
+#      - https://github.com/tonsky/AnyBar
+
+LOCAL_SSH_KEY="~/.ssh/id_rsa" # This is what ssh will use
+AWS_SSH_KEY_NAME="id_rsa" # This is the above key's public key name in AWS
 
 # Helper function for setting status bar on OS X
 function anybar { echo -n $1 | nc -4u -w0 localhost ${2:-1738}; }
@@ -41,7 +45,7 @@ esac
 
 function startup_server {
     echo "Starting up proxy server"
-    id=$(aws ec2 run-instances --image-id "$AMI" --instance-type "t2.micro" --query "Instances[].InstanceId" --output text --region "$REGION" --key-name "id_rsa")
+    id=$(aws ec2 run-instances --image-id "$AMI" --instance-type "t2.micro" --query "Instances[].InstanceId" --output text --region "$REGION" --key-name "$AWS_SSH_KEY_NAME")
     aws ec2 create-tags --resources "$id" --tags Key="Deployment",Value="$DEPLOYMENT" --region "$REGION"
     echo "Waiting for proxy server ($id)"
     time aws ec2 wait instance-status-ok --instance-ids $id --region "$REGION"
@@ -56,7 +60,7 @@ function shutdown_server {
 function open_connection {
     ip=$(aws ec2 describe-instances --filters "Name=tag-value,Values=$DEPLOYMENT" --query "Reservations[].Instances[].NetworkInterfaces[].Association.PublicIp" --output text --region "$REGION")
     echo "Opening SSH connection to $ip"
-    ssh -Nn -D 8085 -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -l ec2-user $ip &
+    ssh -Nn -D 8085 -i "$LOCAL_SSH_KEY" -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -l ec2-user $ip &
 }
 
 function start_proxy {
