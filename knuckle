@@ -1,24 +1,27 @@
 #! /bin/bash
 
+set -e
+
 ## knuckle 
 #     Launches an ephemeral proxy instance and set SOCKS5 proxy
 #     On interrupt, shuts down instance and turns off proxy
 #
-# Assumes this machine's id_rds.pub is imported into the AWS region
+# Assumes this machine's id_rsa.pub is imported into the AWS region
 #
 # Dependencies:
 #
 #    awscli w/ working IAM credentials
-#        
+#
 
-if [[ $EUID -ne 0 ]]; then
-  echo "You must be a root user" 2>&1
-  exit 1
-fi
+# Helper function for setting status bar on OS X
+function anybar { echo -n $1 | nc -4u -w0 localhost ${2:-1738}; }
 
 trap clean_up SIGINT
 
-set -e
+if [[ $EUID -ne 0 ]]; then
+  echo "You must be a root user. Exiting." 2>&1
+  exit 1
+fi
 
 REGION=$1
 DEPLOYMENT=$(openssl rand -base64 8)
@@ -38,10 +41,10 @@ esac
 
 function startup_server {
     echo "Starting up proxy server"
-    id=$(aws ec2 run-instances --image-id "$AMI" --instance-type "t2.micro" --query "Instances[].InstanceId" --output text --region "$REGION" --key-name "macbook")
+    id=$(aws ec2 run-instances --image-id "$AMI" --instance-type "t2.micro" --query "Instances[].InstanceId" --output text --region "$REGION" --key-name "id_rsa")
     aws ec2 create-tags --resources "$id" --tags Key="Deployment",Value="$DEPLOYMENT" --region "$REGION"
     echo "Waiting for proxy server ($id)"
-    aws ec2 wait instance-status-ok --instance-ids $id --region "$REGION"
+    time aws ec2 wait instance-status-ok --instance-ids $id --region "$REGION"
 }
 
 function shutdown_server {
@@ -58,12 +61,14 @@ function open_connection {
 
 function start_proxy {
     echo "Setting SOCKS5 proxy"
-    sudo networksetup -setsocksfirewallproxy "Wi-Fi" 127.0.0.1 8085    
+    sudo networksetup -setsocksfirewallproxy "Wi-Fi" 127.0.0.1 8085
+    anybar blue
 }
 
 function stop_proxy {
     echo "Closing SOCKS5 proxy"
     sudo networksetup -setsocksfirewallproxystate "Wi-Fi" off
+    anybar white
 }
 
 function clean_up {
